@@ -1,0 +1,914 @@
+```swift
+//
+//  KeyActionsEditView.swift
+//  MainApp
+//
+//  Created by ensan on 2021/02/21.
+//  Copyright © 2021 ensan. All rights reserved.
+//
+
+import AzooKeyUtils
+import CustardKit
+import Foundation
+import KeyboardViews
+import SwiftUI
+import SwiftUIUtils
+
+extension CodableActionData {
+    var hasAssociatedValue: Bool {
+        switch self {
+        case .delete, .smartDelete, .input, .replaceLastCharacters, .replaceDefault, .moveCursor, .smartMoveCursor, .moveTab, .launchApplication, .selectCandidate: true
+        case  .enableResizingMode, .complete, .smartDeleteDefault, .toggleCapsLockState, .toggleCursorBar, .toggleTabBar, .dismissKeyboard, .paste: false
+        }
+    }
+
+    private func stringArrayDescription(_ array: [String]) -> String {
+        array.map {$0 == "\n" ? "改行" : "'\($0)'"}.joined(separator: ", ")
+    }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case let .input(value): return "「\(value)」を入力"
+        case let .moveCursor(value): return "\(String(value))文字分カーソルを移動"
+        case let .smartMoveCursor(value): return "\(stringArrayDescription(value.targets))の隣までカーソルを移動"
+        case let .delete(value): return "\(String(value))文字削除"
+        case let .smartDelete(value): return "\(stringArrayDescription(value.targets))の隣まで削除"
+        case .paste: return "ペーストする"
+        case .moveTab: return "タブの移動"
+        case .replaceLastCharacters: return "末尾の文字を置換"
+        case let .selectCandidate(selection):
+            return switch selection {
+            case .first: "最初の候補を選択"
+            case .last: "最後の候補を選択"
+            case .offset(let value): "\(value)個隣の候補を選択"
+            case .exact(let value): "\(value)番目の候補を選択"
+            }
+        case .complete: return "確定"
+        case .replaceDefault: return "特殊な置換"
+        case .smartDeleteDefault: return "文頭まで削除"
+        case .toggleCapsLockState: return "Caps lockのモードの切り替え"
+        case .toggleCursorBar: return "カーソルバーの切り替え"
+        case .toggleTabBar: return "タブバーの切り替え"
+        case .dismissKeyboard: return "キーボードを閉じる"
+        case .enableResizingMode: return "片手モードをオンにする"
+        case let .launchApplication(value):
+            switch value.scheme {
+            case .azooKey:
+                return "azooKey本体アプリを開く"
+            case .shortcuts:
+                return "ショートカットを実行する"
+            }
+        }
+    }
+}
+
+struct EditingCodableActionData: Identifiable, Equatable {
+    typealias ID = UUID
+    let id = UUID()
+    var data: CodableActionData
+    init(_ data: CodableActionData) {
+        self.data = data
+    }
+}
+
+struct CodableActionDataEditor: View {
+    @State private var editMode = EditMode.inactive
+    @State private var bottomSheetShown = false
+    @State private var actions: [EditingCodableActionData]
+    @Binding private var data: [CodableActionData]
+    private let availableCustards: [String]
+
+    init(_ actions: Binding<[CodableActionData]>, availableCustards: [String]) {
+        self._data = actions
+        self._actions = State(initialValue: actions.wrappedValue.map {EditingCodableActionData($0)})
+        self.availableCustards = availableCustards
+    }
+
+    private func add(new action: CodableActionData) {
+        withAnimation(Animation.interactiveSpring()) {
+            actions.append(EditingCodableActionData(action))
+        }
+    }
+
+    var body: some View {
+        GeometryReader {geometry in
+            Form {
+                Section {
+                    Text("上から順に実行されます")
+                }
+                Section {
+                    Button {
+                        self.bottomSheetShown = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus")
+                            Text("アクションを追加")
+                        }
+                    }
+                }
+                Section(header: Text("アクション")) {
+                    DisclosuringList($actions) { $action in
+                        CodableActionEditor(action: $action, availableCustards: availableCustards)
+                    } label: { action in
+                        Text(action.data.label)
+                    }
+                    .onDelete(perform: delete)
+                    .onMove(perform: onMove)
+                    .disclosed { item in item.data.hasAssociatedValue }
+                }
+            }
+            BottomSheetView(
+                isOpen: self.$bottomSheetShown,
+                maxHeight: geometry.size.height * 0.7
+            ) {
+                ActionPicker { action in
+                    add(new: action)
+                    bottomSheetShown = false
+                }
+            }
+        }
+        .onChange(of: actions) {_ in
+            self.data = actions.map {$0.data}
+        }
+        .navigationBarTitle(Text("動作の編集"), displayMode: .inline)
+        .navigationBarItems(trailing: editButton)
+        .environment(\.editMode, $editMode)
+    }
+
+    private var editButton: some View {
+        Button {
+            switch editMode {
+            case .inactive:
+                editMode = .active
+            case .active, .transient:
+                editMode = .inactive
+            @unknown default:
+                editMode = .inactive
+            }
+        } label: {
+            switch editMode {
+            case .inactive:
+                Text("削除と順番")
+            case .active, .transient:
+                Text("完了")
+            @unknown default:
+                Text("完了")
+            }
+        }
+    }
+
+    private func delete(at offsets: IndexSet) {
+        actions.remove(atOffsets: offsets)
+    }
+
+    private func onMove(source: IndexSet, destination: Int) {
+        actions.move(fromOffsets: source, toOffset: destination)
+    }
+}
+
+private struct CodableActionEditor: View {
+    init(action: Binding<EditingCodableActionData>, availableCustards: [String]) {
+        self.availableCustards = availableCustards
+        self._action = action
+    }
+
+    @Binding private var action: EditingCodableActionData
+    private let availableCustards: [String]
+
+    var body: some View {
+        switch action.data {
+        case let .input(value):
+            ActionEditTextField("入力する文字", action: $action) {value} convert: {.input($0)}
+        case let .delete(count):
+            ActionEditIntegerTextField("削除する文字数", action: $action) {"\(count)"} convert: {value in
+                if let count = Int(value) {
+                    return .delete(count)
+                }
+                return nil
+            }
+            Text("負の値を指定すると右側の文字を削除します")
+        case let .moveCursor(count):
+            ActionEditIntegerTextField("移動する文字数", action: $action) {"\(count)"} convert: {value in
+                if let count = Int(value) {
+                    return .moveCursor(count)
+                }
+                return nil
+            }
+            Text("負の値を指定すると左にカーソルが動きます")
+        case .moveTab:
+            ActionMoveTabEditView($action, availableCustards: availableCustards)
+        case .smartDelete(let item):
+            ActionScanItemEditor(action: $action) { item } convert: { value in
+                // 重複を除去し、改行を追加する
+                let targets = Array(value.targets.uniqued())
+                return .smartDelete(ScanItem(targets: targets, direction: value.direction))
+            }
+        case .smartMoveCursor(let item):
+            ActionScanItemEditor(action: $action) { item } convert: { value in
+                // 重複を除去し、改行を追加する
+                let targets = Array(value.targets.uniqued())
+                return .smartMoveCursor(ScanItem(targets: targets, direction: value.direction))
+            }
+        case let .replaceLastCharacters(pairs):
+            ActionPairItemEditor(action: $action) { pairs.map {.init(first: $0.key, second: $0.value)} } convert: { value in
+                // 重複を除去し、改行を追加する
+                let items = Dictionary(value.uniqued().map {(key: $0.first, value: $0.second)}, uniquingKeysWith: {first, _ in first})
+                return .replaceLastCharacters(items)
+            }
+        case let .launchApplication(item):
+            if item.target.hasPrefix("run-shortcut?") {
+                ActionEditTextField("オプション", action: $action) {String(item.target.dropFirst("run-shortcut?".count))} convert: {value in
+                    .launchApplication(LaunchItem(scheme: .shortcuts, target: "run-shortcut?" + value))
+                }
+                FallbackLink("オプションの設定方法", destination: URL(string: "https://support.apple.com/ja-jp/guide/shortcuts/apd624386f42/ios")!)
+            } else {
+                Text("このアプリでは編集できないアクションです")
+            }
+        case .selectCandidate(let item):
+            ActionEditCandidateSelection(action: $action, initialValue: {item})
+        case .replaceDefault:
+            ActionReplaceBehaviorEditView($action)
+        case .paste, .complete, .smartDeleteDefault, .enableResizingMode, .toggleTabBar, .toggleCursorBar, .toggleCapsLockState, .dismissKeyboard:
+            EmptyView()
+        }
+    }
+}
+
+private struct ActionScanItemEditor: View {
+    @Binding private var action: EditingCodableActionData
+    private let convert: (ScanItem) -> CodableActionData?
+    @State private var addItem: String = ""
+    @State private var value: ScanItem = .init(targets: CodableActionData.scanTargets, direction: .backward)
+
+    init(action: Binding<EditingCodableActionData>, initialValue: () -> ScanItem?, convert: @escaping (ScanItem) -> CodableActionData?) {
+        self.convert = convert
+        self._action = action
+        if let initialValue = initialValue() {
+            self._value = State(initialValue: initialValue)
+        }
+    }
+
+    func targetItemView(action: @escaping () -> Void, leftLabel: () -> some View, rightLabel: () -> some View) -> some View {
+        HStack {
+            leftLabel()
+                .padding(.horizontal)
+            Divider()
+            Button {
+                action()
+            } label: {
+                rightLabel()
+                    .padding(7)
+                    .contentShape(Rectangle())
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.systemGray5)
+        }
+    }
+
+    var body: some View {
+        Group {
+            Picker("方向", selection: $value.direction) {
+                Text("左向き").tag(ScanItem.Direction.backward)
+                Text("右向き").tag(ScanItem.Direction.forward)
+            }
+            .pickerStyle(.menu)
+            HStack {
+                TextField("目指す文字を追加", text: $addItem)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+                if value.targets.contains(addItem) {
+                    Button("追加済", systemImage: "plus") {}
+                        .buttonStyle(.borderless)
+                        .labelStyle(.titleOnly)
+                        .disabled(true)
+                        .padding(7)
+                        .background {
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.systemGray5)
+                        }
+                } else {
+                    Button("追加", systemImage: "plus") {
+                        value.targets.append(addItem)
+                        addItem = ""
+                    }
+                    .buttonStyle(.borderless)
+                    .labelStyle(.titleOnly)
+                    .disabled(addItem.isEmpty)
+                    .padding(7)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.systemGray5)
+                    }
+
+                }
+            }
+            HStack {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(value.targets, id: \.self) { item in
+                            targetItemView {
+                                value.targets.removeAll(where: { $0 == item })
+                            } leftLabel: {
+                                if item == "\n" {
+                                    Text("改行")
+                                } else {
+                                    Text(item)
+                                }
+                            } rightLabel: {
+                                Label("削除", systemImage: "xmark")
+                            }
+                        }
+                    }
+                }
+                if !value.targets.contains("\n") {
+                    Spacer()
+                    Divider()
+                    HStack {
+                        targetItemView {
+                            value.targets.append("\n")
+                        } leftLabel: {
+                            Text("改行")
+                        } rightLabel: {
+                            Label("追加", systemImage: "plus")
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: value) {value in
+            if let data = convert(value) {
+                action.data = data
+            }
+        }
+    }
+}
+
+private struct ActionPairItemEditor: View {
+    struct Pair: Equatable, Hashable {
+        var first: String
+        var second: String
+    }
+    @Binding private var action: EditingCodableActionData
+    private let convert: ([Pair]) -> CodableActionData?
+    @State private var addFirstItem: String = ""
+    @State private var addSecondItem: String = ""
+    @State private var value: [Pair] = []
+
+    init(action: Binding<EditingCodableActionData>, initialValue: () -> [Pair]?, convert: @escaping ([Pair]) -> CodableActionData?) {
+        self.convert = convert
+        self._action = action
+        if let initialValue = initialValue() {
+            self._value = State(initialValue: initialValue)
+        }
+    }
+
+    func targetItemView(action: @escaping () -> Void, leftLabel: () -> some View, rightLabel: () -> some View) -> some View {
+        HStack {
+            leftLabel()
+                .padding(.leading)
+            Divider()
+            Button {
+                action()
+            } label: {
+                rightLabel()
+                    .padding(.vertical, 7)
+                    .padding(.trailing, 7)
+                    .contentShape(Rectangle())
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.systemGray5)
+        }
+    }
+
+    var body: some View {
+        Group {
+            HStack {
+                TextField("置換前", text: $addFirstItem)
+                TextField("置換後", text: $addSecondItem)
+                if value.contains(where: { $0.first == addFirstItem }) {
+                    Button("追加済") {}
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 7)
+                        .background {
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.systemGray5)
+                        }
+                        .disabled(true) // addSecondItemは空白でも良い
+                } else {
+                    Button("追加") {
+                        self.value.append(.init(first: addFirstItem, second: addSecondItem))
+                        addFirstItem = ""
+                        addSecondItem = ""
+                    }
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 7)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.systemGray5)
+                    }
+                    .disabled(addFirstItem.isEmpty) // addSecondItemは空白でも良い
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .submitLabel(.done)
+            .buttonStyle(.borderless)
+            HStack {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(self.value, id: \.self) { item in
+                            targetItemView {
+                                value.removeAll(where: { $0 == item })
+                            } leftLabel: {
+                                Text(item.first + "→" + item.second)
+                            } rightLabel: {
+                                Label("削除", systemImage: "xmark")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: value) {value in
+            if let data = convert(value) {
+                action.data = data
+            }
+        }
+    }
+}
+
+private struct ActionEditTextField: View {
+    private let title: LocalizedStringKey
+    @Binding private var action: EditingCodableActionData
+    private let convert: (String) -> CodableActionData?
+    init(_ title: LocalizedStringKey, action: Binding<EditingCodableActionData>, initialValue: () -> String?, convert: @escaping (String) -> CodableActionData?) {
+        self.title = title
+        self.convert = convert
+        self._action = action
+        if let initialValue = initialValue() {
+            self._value = State(initialValue: initialValue)
+        }
+    }
+
+    @State private var value = ""
+
+    var body: some View {
+        TextField(title, text: $value)
+            .onChange(of: value) {value in
+                if let data = convert(value) {
+                    action.data = data
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .submitLabel(.done)
+    }
+}
+
+private struct ActionEditIntegerTextField: View {
+    private let title: LocalizedStringKey
+    private let range: ClosedRange<Int>
+    @Binding private var action: EditingCodableActionData
+    private let convert: (String) -> CodableActionData?
+    init(_ title: LocalizedStringKey, action: Binding<EditingCodableActionData>, range: ClosedRange<Int> = .min ... .max, initialValue: () -> String?, convert: @escaping (String) -> CodableActionData?) {
+        self.title = title
+        self.range = range
+        self.convert = convert
+        self._action = action
+        if let initialValue = initialValue() {
+            self._value = State(initialValue: initialValue)
+        }
+    }
+
+    @State private var value = ""
+
+    var body: some View {
+        IntegerTextField(title, text: $value, range: range)
+            .onChange(of: value) {value in
+                if let data = convert(value) {
+                    action.data = data
+                }
+            }
+            .keyboardType(.numberPad)
+            .textFieldStyle(.roundedBorder)
+            .submitLabel(.done)
+    }
+}
+
+private struct ActionEditCandidateSelection: View {
+
+    private enum CandidateSelectionKeys: String, Equatable, Hashable, Sendable, CaseIterable {
+        case first, last, offset, exact
+        init(from selection: CandidateSelection) {
+            self = switch selection {
+            case .first:
+                .first
+            case .last:
+                .last
+            case .offset:
+                .offset
+            case .exact:
+                .exact
+            }
+        }
+    }
+
+    init(action: Binding<EditingCodableActionData>, initialValue: () -> CandidateSelection?) {
+        self._action = action
+        if let initialValue = initialValue() {
+            self._selectionType = State(initialValue: .init(from: initialValue))
+            switch initialValue {
+            case .first, .last:
+                self._integerValue = State(initialValue: "")
+            case .offset(let int), .exact(let int):
+                self._integerValue = State(initialValue: "\(int)")
+            }
+        }
+    }
+
+    @State private var selectionType: CandidateSelectionKeys = .first
+    @State private var integerValue = ""
+    @Binding private var action: EditingCodableActionData
+
+    private var resultCandidateSelection: CandidateSelection {
+        switch selectionType {
+        case .first:
+            .first
+        case .last:
+            .last
+        case .offset:
+            .offset(Int(self.integerValue) ?? 0)
+        case .exact:
+            .exact(Int(self.integerValue) ?? 0)
+        }
+    }
+
+    var body: some View {
+        Group {
+            Picker("選び方", selection: $selectionType) {
+                Text("最初の候補").tag(CandidateSelectionKeys.first)
+                Text("最後の候補").tag(CandidateSelectionKeys.last)
+                Text("絶対位置の候補").tag(CandidateSelectionKeys.exact)
+                Text("相対位置の候補").tag(CandidateSelectionKeys.offset)
+            }
+            switch self.selectionType {
+            case .first, .last: EmptyView()
+            case .offset:
+                IntegerTextField("値", text: $integerValue, range: .min ... .max)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+            case .exact:
+                IntegerTextField("値", text: $integerValue, range: 0 ... .max)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+            }
+        }
+        .onChange(of: integerValue) {_ in
+            action.data = .selectCandidate(resultCandidateSelection)
+        }
+        .onChange(of: selectionType) {_ in
+            action.data = .selectCandidate(resultCandidateSelection)
+        }
+    }
+}
+
+private struct ActionReplaceBehaviorEditView: View {
+    @Binding private var action: EditingCodableActionData
+    @State private var replaceType: ReplaceBehavior.ReplaceType = .default
+    @State private var fallbacks: [ReplaceBehavior.ReplaceType] = []
+    @State private var originalFallbacks: [ReplaceBehavior.ReplaceType] = []
+
+    init(_ action: Binding<EditingCodableActionData>) {
+        self._action = action
+        if case let .replaceDefault(value) = action.wrappedValue.data {
+            self._replaceType = State(initialValue: value.type)
+            self._fallbacks = State(initialValue: value.fallbacks)
+            self._originalFallbacks = State(initialValue: value.fallbacks)
+        }
+    }
+
+    var body: some View {
+        Picker("置換のタイプ", selection: $replaceType) {
+            Text("大文字/小文字、拗音/濁音/半濁音の切り替え").tag(ReplaceBehavior.ReplaceType.default)
+            Text("濁点をつける").tag(ReplaceBehavior.ReplaceType.dakuten)
+            Text("半濁点をつける").tag(ReplaceBehavior.ReplaceType.handakuten)
+            Text("小書きにする").tag(ReplaceBehavior.ReplaceType.kogaki)
+        }
+        .onChange(of: replaceType) { newValue in
+            self.action.data = .replaceDefault(.init(type: newValue, fallbacks: self.fallbacks))
+        }
+        Picker("フォールバック", selection: $fallbacks) {
+            Text("デフォルト").tag([ReplaceBehavior.ReplaceType.default])
+            Text("フォールバックなし").tag([ReplaceBehavior.ReplaceType]())
+            if !(originalFallbacks.isEmpty || originalFallbacks == [.default]) {
+                Text("オリジナル").tag(originalFallbacks)
+            }
+        }
+        .onChange(of: fallbacks) { newValue in
+            self.action.data = .replaceDefault(.init(type: self.replaceType, fallbacks: newValue))
+        }
+    }
+}
+
+private struct ActionMoveTabEditView: View {
+    @Binding private var action: EditingCodableActionData
+    private let availableCustards: [String]
+    @State private var selectedTab: TabData = .system(.user_japanese)
+
+    init(_ action: Binding<EditingCodableActionData>, availableCustards: [String]) {
+        self.availableCustards = availableCustards
+        self._action = action
+        if case let .moveTab(value) = action.wrappedValue.data {
+            self._selectedTab = State(initialValue: value)
+        }
+    }
+
+    var body: some View {
+        AvailableTabPicker(selectedTab, availableCustards: self.availableCustards) {tab in
+            self.action.data = .moveTab(tab)
+        }
+    }
+}
+
+extension TabData {
+    var label: LocalizedStringKey {
+        switch self {
+        case let .system(tab):
+            switch tab {
+            case .user_japanese:
+                return "日本語(設定に合わせる)"
+            case .user_english:
+                return "英語(設定に合わせる)"
+            case .flick_japanese:
+                return "日本語(フリック入力)"
+            case .flick_english:
+                return "英語(フリック入力)"
+            case .flick_numbersymbols:
+                return "記号と数字(フリック入力)"
+            case .qwerty_japanese:
+                return "日本語(ローマ字入力)"
+            case .qwerty_english:
+                return "英語(ローマ字入力)"
+            case .qwerty_numbers:
+                return "数字(ローマ字入力)"
+            case .qwerty_symbols:
+                return "記号(ローマ字入力)"
+            case .last_tab:
+                return "最後に表示していたタブ"
+            case .clipboard_history_tab:
+                return "クリップボードの履歴"
+            case .emoji_tab:
+                return "絵文字"
+            }
+        case let .custom(identifier):
+            return LocalizedStringKey(identifier)
+        }
+    }
+}
+
+struct AvailableTabPicker: View {
+    @State private var selectedTab: TabData = .system(.user_japanese)
+    private let items: [(label: String, tab: TabData)]
+    private let process: (TabData) -> Void
+
+    init(_ initialValue: TabData, availableCustards: [String]? = nil, onChange process: @escaping (TabData) -> Void = {_ in}) {
+        self._selectedTab = State(initialValue: initialValue)
+        self.process = process
+        var dict: [(label: String, tab: TabData)] = [
+            ("日本語(設定に合わせる)", .system(.user_japanese)),
+            ("英語(設定に合わせる)", .system(.user_english)),
+            ("記号と数字(フリック入力)", .system(.flick_numbersymbols)),
+            ("数字(ローマ字入力)", .system(.qwerty_numbers)),
+            ("記号(ローマ字入力)", .system(.qwerty_symbols)),
+            ("絵文字", .system(.emoji_tab)),
+            ("クリップボードの履歴", .system(.clipboard_history_tab)),
+            ("最後に表示していたタブ", .system(.last_tab)),
+            ("日本語(フリック入力)", .system(.flick_japanese)),
+            ("日本語(ローマ字入力)", .system(.qwerty_japanese)),
+            ("英語(フリック入力)", .system(.flick_english)),
+            ("英語(ローマ字入力)", .system(.qwerty_english)),
+        ]
+        (availableCustards ?? CustardManager.load().availableCustards) .forEach {
+            dict.insert(($0, .custom($0)), at: 0)
+        }
+        self.items = dict
+    }
+
+    var body: some View {
+        Picker(selection: $selectedTab, label: Text("移動先のタブ")) {
+            ForEach(items.indices, id: \.self) {i in
+                Text(LocalizedStringKey(items[i].label)).tag(items[i].tab)
+            }
+        }
+        .onChange(of: selectedTab, perform: process)
+    }
+}
+
+struct CodableLongpressActionDataEditor: View {
+    @State private var editMode = EditMode.inactive
+    @State private var bottomSheetShown = false
+    @State private var addTarget: AddTarget = .start
+
+    private enum AddTarget {
+        case `repeat`
+        case start
+    }
+
+    @State private var startActions: [EditingCodableActionData]
+    @State private var repeatActions: [EditingCodableActionData]
+    @Binding private var data: CodableLongpressActionData
+    private let availableCustards: [String]
+
+    init(_ actions: Binding<CodableLongpressActionData>, availableCustards: [String]) {
+        self._data = actions
+        self._startActions = State(initialValue: actions.wrappedValue.start.map {EditingCodableActionData($0)})
+        self._repeatActions = State(initialValue: actions.wrappedValue.repeat.map {EditingCodableActionData($0)})
+        self.availableCustards = availableCustards
+    }
+
+    private func add(new action: CodableActionData) {
+        withAnimation(Animation.interactiveSpring()) {
+            switch self.addTarget {
+            case .start:
+                startActions.append(EditingCodableActionData(action))
+            case .repeat:
+                repeatActions.append(EditingCodableActionData(action))
+            }
+        }
+    }
+
+    var body: some View {
+        GeometryReader {geometry in
+            Form {
+                Section {
+                    Text("上から順に実行されます")
+                    Picker("長押しの長さ", selection: $data.duration) {
+                        Text("標準").tag(CodableLongpressActionData.LongpressDuration.normal)
+                        Text("軽く").tag(CodableLongpressActionData.LongpressDuration.light)
+                    }
+                }
+                Section(header: Text("押し始めのアクション")) {
+                    Button {
+                        self.addTarget = .start
+                        self.bottomSheetShown = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus")
+                            Text("アクションを追加")
+                        }
+                    }
+                    DisclosuringList($startActions) { $action in
+                        CodableActionEditor(action: $action, availableCustards: availableCustards)
+                    } label: { action in
+                        Text(action.data.label)
+                    }
+                    .onDelete(perform: {startActions.remove(atOffsets: $0)})
+                    .onMove(perform: {startActions.move(fromOffsets: $0, toOffset: $1)})
+                    .disclosed { item in item.data.hasAssociatedValue }
+                }
+                Section(header: Text("押している間のアクション")) {
+                    Button {
+                        self.addTarget = .repeat
+                        self.bottomSheetShown = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus")
+                            Text("アクションを追加")
+                        }
+                    }
+                    DisclosuringList($repeatActions) { $action in
+                        CodableActionEditor(action: $action, availableCustards: availableCustards)
+                    } label: { action in
+                        Text(action.data.label)
+                    }
+                    .onDelete(perform: {repeatActions.remove(atOffsets: $0)})
+                    .onMove(perform: {repeatActions.move(fromOffsets: $0, toOffset: $1)})
+                    .disclosed { item in item.data.hasAssociatedValue }
+                }
+            }
+            BottomSheetView(
+                isOpen: self.$bottomSheetShown,
+                maxHeight: geometry.size.height * 0.7
+            ) {
+                ActionPicker { action in
+                    add(new: action)
+                    bottomSheetShown = false
+                }
+            }
+        }
+        .onChange(of: startActions) {value in
+            self.data.start = value.map {$0.data}
+        }
+        .onChange(of: repeatActions) {value in
+            self.data.repeat = value.map {$0.data}
+        }
+        .navigationBarTitle(Text("動作の編集"), displayMode: .inline)
+        .navigationBarItems(trailing: editButton)
+        .environment(\.editMode, $editMode)
+    }
+
+    private var editButton: some View {
+        Button {
+            switch editMode {
+            case .inactive:
+                editMode = .active
+            case .active, .transient:
+                editMode = .inactive
+            @unknown default:
+                editMode = .inactive
+            }
+        } label: {
+            switch editMode {
+            case .inactive:
+                Text("削除と順番")
+            case .active, .transient:
+                Text("完了")
+            @unknown default:
+                Text("完了")
+            }
+        }
+    }
+}
+
+private struct ActionPicker: View {
+    private let process: (CodableActionData) -> Void
+
+    init(process: @escaping (CodableActionData) -> Void) {
+        self.process = process
+    }
+
+    var body: some View {
+        Form {
+            Section(header: Text("基本")) {
+                Button("タブの移動") {
+                    process(.moveTab(.system(.user_japanese)))
+                }
+                Button("タブバーの表示") {
+                    process(.toggleTabBar)
+                }
+                Button("カーソル移動") {
+                    process(.moveCursor(-1))
+                }
+                Button("文字の入力") {
+                    process(.input(""))
+                }
+                Button("文字の削除") {
+                    process(.delete(1))
+                }
+                if SemiStaticStates.shared.hasFullAccess {
+                    Button("ペースト") {
+                        process(.paste)
+                    }
+                }
+            }
+            Section(header: Text("高度")) {
+                Button("文頭まで削除") {
+                    process(.smartDeleteDefault)
+                }
+                Button("特定の文字まで削除") {
+                    process(.smartDelete(ScanItem(targets: ["。", "、", "\n"], direction: .backward)))
+                }
+                Button("特定の文字まで移動") {
+                    process(.smartMoveCursor(ScanItem(targets: ["。", "、", "\n"], direction: .backward)))
+                }
+                Button("末尾の文字を置換") {
+                    process(.replaceLastCharacters(["(^^)": "😄", "(TT)": "😭"]))
+                }
+                Button("特殊な置換") {
+                    process(.replaceDefault(.default))
+                }
+                Button("片手モードをオン") {
+                    process(.enableResizingMode)
+                }
+                Button("候補を選択") {
+                    process(.selectCandidate(.offset(1)))
+                }
+                Button("入力の確定") {
+                    process(.complete)
+                }
+                Button("Caps lock") {
+                    process(.toggleCapsLockState)
+                }
+                Button("カーソルバーの表示") {
+                    process(.toggleCursorBar)
+                }
+                Button("ショートカットを実行") {
+                    process(.launchApplication(.init(scheme: .shortcuts, target: "run-shortcut?name=[名前]&input=[入力]&text=[テキスト]")))
+                }
+                Button("キーボードを閉じる") {
+                    process(.dismissKeyboard)
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+}
+```

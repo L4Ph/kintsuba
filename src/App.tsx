@@ -1,34 +1,18 @@
 import { useState } from "react";
+import type { ChangeEvent } from "react"; // ChangeEventをtype-only importに変更
 import "./App.css";
+import Ajv, { type ValidateFunction } from "ajv"; // ValidateFunctionをインポート
+import { zodToJsonSchema } from "zod-to-json-schema";
+import {
+	CustardSchema,
+	CustardArraySchema,
+	type Custard,
+} from "./custardSchema"; // Custardをtype-only importに変更
 
-// 型定義 (簡易版)
-interface CustardMetadata {
-	custard_version: string;
-	display_name: string;
-}
-
-interface CustardKeyLayout {
-	type: "grid_fit" | "grid_scroll";
-	row_count: number;
-	column_count: number;
-	direction?: "vertical" | "horizontal";
-}
-
-interface CustardInterface {
-	key_layout: CustardKeyLayout;
-	key_style: "tenkey_style" | "pc_style";
-	keys: unknown[]; // とりあえず unknown
-}
-
-interface Custard {
-	identifier: string;
-	language: string;
-	input_style: string;
-	metadata: CustardMetadata;
-	interface: CustardInterface;
-}
+const ajv = new Ajv();
 
 function App() {
+	const [custard, setCustard] = useState<Custard | null>(null); // 初期状態をnullに
 	const [identifier, setIdentifier] = useState("my_flick");
 	const [language, setLanguage] = useState("ja_JP");
 	const [inputStyle, setInputStyle] = useState("direct");
@@ -50,6 +34,7 @@ function App() {
 
 	// biome-ignore lint/suspicious/noExplicitAny: <explanation>
 	const [keys, setKeys] = useState<any[]>([]); // キーのデータは後で詳細化
+	const [error, setError] = useState<string | null>(null);
 
 	const handleAddKey = () => {
 		// ダミーのキーデータを追加
@@ -60,7 +45,14 @@ function App() {
 	};
 
 	const generateCustardJson = () => {
-		const custardData: Custard = {
+		if (!custard && !identifier) {
+			// custardがnullの場合、identifierも考慮
+			setError("データが読み込まれていません。");
+			return;
+		}
+
+		const custardData: Custard = custard ?? {
+			// custardがnullの場合、現在のフォームの値から生成
 			identifier,
 			language,
 			input_style: inputStyle,
@@ -81,13 +73,143 @@ function App() {
 				keys: keys, // 本来は整形されたキーデータ
 			},
 		};
-		console.log(JSON.stringify(custardData, null, 2));
-		// ここでJSON出力処理を行う (例: ダウンロード)
+		const jsonString = JSON.stringify(custardData, null, 2);
+		console.log(jsonString);
+
+		const blob = new Blob([jsonString], { type: "application/json" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `${custardData.identifier}.json`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+		setError(null); // エラーをクリア
+	};
+
+	const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		if (!file) {
+			return;
+		}
+
+		const reader = new FileReader();
+		reader.onload = async (e) => {
+			try {
+				const text = e.target?.result;
+				if (typeof text !== "string") {
+					setError("ファイルの内容を読み取れませんでした。");
+					return;
+				}
+				const parsedJson: unknown = JSON.parse(text); // unknown型としてパース
+
+				// まず単体のCustardとしてバリデーション
+				const singleCustardSchemaJson = zodToJsonSchema(
+					CustardSchema,
+					"custardSchema",
+				);
+				const validateSingle = ajv.compile<Custard>(singleCustardSchemaJson);
+
+				if (validateSingle(parsedJson)) {
+					// validateSingle(parsedJson) が true の場合、parsedJson は Custard 型として扱える
+					setCustard(parsedJson);
+					// フォームに値をセット
+					setIdentifier(parsedJson.identifier);
+					setLanguage(parsedJson.language);
+					setInputStyle(parsedJson.input_style);
+					setCustardVersion(parsedJson.metadata.custard_version);
+					setDisplayName(parsedJson.metadata.display_name);
+					setKeyLayoutType(parsedJson.interface.key_layout.type);
+					setRowCount(parsedJson.interface.key_layout.row_count);
+					setColumnCount(parsedJson.interface.key_layout.column_count);
+					if (parsedJson.interface.key_layout.type === "grid_scroll") {
+						setScrollDirection(
+							parsedJson.interface.key_layout.direction || "vertical",
+						);
+					}
+					setKeyStyle(parsedJson.interface.key_style);
+					setKeys(parsedJson.interface.keys);
+					setError(null);
+					console.log(
+						"Custard JSON (single) loaded and validated:",
+						parsedJson,
+					);
+					return;
+				}
+
+				// 単体でダメなら配列形式でバリデーション
+				const arrayCustardSchemaJson = zodToJsonSchema(
+					CustardArraySchema,
+					"custardArraySchema",
+				);
+				const validateArray = ajv.compile<Custard[]>(arrayCustardSchemaJson);
+
+				if (validateArray(parsedJson)) {
+					// validateArray(parsedJson) が true の場合、parsedJson は Custard[] 型として扱える
+					// 配列の場合は最初の要素を読み込むか、別途UIで選択させるなど検討が必要
+					// ここでは最初の要素を読み込む例
+					if (parsedJson.length > 0) {
+						const firstCustard = parsedJson[0];
+						setCustard(firstCustard);
+						// フォームに値をセット
+						setIdentifier(firstCustard.identifier);
+						setLanguage(firstCustard.language);
+						setInputStyle(firstCustard.input_style);
+						setCustardVersion(firstCustard.metadata.custard_version);
+						setDisplayName(firstCustard.metadata.display_name);
+						setKeyLayoutType(firstCustard.interface.key_layout.type);
+						setRowCount(firstCustard.interface.key_layout.row_count);
+						setColumnCount(firstCustard.interface.key_layout.column_count);
+						if (firstCustard.interface.key_layout.type === "grid_scroll") {
+							setScrollDirection(
+								firstCustard.interface.key_layout.direction || "vertical",
+							);
+						}
+						setKeyStyle(firstCustard.interface.key_style);
+						setKeys(firstCustard.interface.keys);
+						setError(null);
+						console.log(
+							"Custard JSON (first of array) loaded and validated:",
+							firstCustard,
+						);
+					} else {
+						setError("アップロードされたJSON配列が空です。");
+					}
+					return;
+				}
+
+				// どちらのスキーマにも一致しない場合
+				// ajv.errors は ajv インスタンスのプロパティで、最後の検証エラーを保持します。
+				setError(`JSONの形式が正しくありません: ${ajv.errorsText(ajv.errors)}`);
+				console.error("Validation errors:", ajv.errors);
+			} catch (err) {
+				setError(
+					`JSONのパースに失敗しました: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				console.error("Error parsing JSON:", err);
+			}
+		};
+		reader.readAsText(file);
 	};
 
 	return (
 		<div className="container">
 			<h1>azooKeyカスタムタブエディタ</h1>
+
+			<section>
+				<h2>ファイル操作</h2>
+				<div>
+					<label htmlFor="file-upload">Custard JSONをアップロード: </label>
+					<input
+						type="file"
+						id="file-upload"
+						accept=".json,.txt,.custard"
+						onChange={handleFileUpload}
+					/>
+				</div>
+				{error && <p className="error-message">{error}</p>}
+			</section>
 
 			<section>
 				<h2>メタデータ</h2>
@@ -228,7 +350,7 @@ function App() {
 				<h2>生成</h2>
 				{/* biome-ignore lint/a11y/useButtonType: <explanation> */}
 				<button onClick={generateCustardJson}>
-					Custard JSON生成 (コンソール出力)
+					Custard JSON生成・ダウンロード
 				</button>
 			</section>
 		</div>
