@@ -338,7 +338,6 @@ function App() {
 				<button onClick={handleAddKey}>キーを追加</button>
 				<div className="keys-preview">
 					{keys.map((key) => (
-						// biome-ignore lint/suspicious/noArrayIndexKey: <explanation>
 						<div key={key.temp_id} className="key-preview">
 							{key.label}
 						</div>
