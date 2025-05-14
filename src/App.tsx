@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react"; // ChangeEventをtype-only importに変更
 import "./App.css";
-import Ajv, { type ValidateFunction } from "ajv"; // ValidateFunctionをインポート
+import Ajv from "ajv"; // ValidateFunctionをインポート
 import { zodToJsonSchema } from "zod-to-json-schema";
 import {
 	CustardSchema,
