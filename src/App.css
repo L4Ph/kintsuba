@@ -1,0 +1,125 @@
+#root {
+	max-width: 1280px;
+	margin: 0 auto;
+	padding: 2rem;
+	/* text-align: center; */ /* 左寄せに変更 */
+}
+
+.container {
+	display: flex;
+	flex-direction: column;
+	gap: 2rem;
+}
+
+section {
+	border: 1px solid #ccc;
+	padding: 1.5rem;
+	border-radius: 8px;
+	background-color: #f9f9f9;
+}
+
+section h2 {
+	margin-top: 0;
+	border-bottom: 1px solid #eee;
+	padding-bottom: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+section h3 {
+	margin-top: 1.5rem;
+	margin-bottom: 0.8rem;
+	color: #333;
+}
+
+label {
+	display: inline-block;
+	min-width: 150px; /* ラベルの幅を揃える */
+	margin-bottom: 0.5rem;
+	font-weight: bold;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+	padding: 0.5rem;
+	border: 1px solid #ddd;
+	border-radius: 4px;
+	margin-bottom: 0.8rem;
+	width: calc(100% - 170px); /* ラベル幅を考慮 */
+	box-sizing: border-box;
+}
+
+button {
+	background-color: #007bff;
+	color: white;
+	padding: 0.6rem 1rem;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 1rem;
+	transition: background-color 0.2s;
+}
+
+button:hover {
+	background-color: #0056b3;
+}
+
+.keys-preview {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-top: 1rem;
+	padding: 1rem;
+	border: 1px dashed #ccc;
+	border-radius: 4px;
+	min-height: 50px;
+	background-color: #fff;
+}
+
+.key-preview {
+	padding: 0.8rem 1.2rem;
+	border: 1px solid #007bff;
+	background-color: #e7f3ff;
+	border-radius: 4px;
+	font-size: 0.9rem;
+	text-align: center;
+}
+
+/* 元のスタイルで不要なものはコメントアウトまたは削除 */
+/*
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+*/
